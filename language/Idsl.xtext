@@ -1,0 +1,356 @@
+grammar org.idsl.language.Idsl with org.eclipse.xtext.common.Terminals
+
+generate idsl "http://www.idsl.org/language/Idsl"
+
+// HIGH-LEVEL MODEL
+Model:
+	 'Section Process' 			('ProcessModel' epmodel+=ExtendedProcessModel)+ 	 			     // What tasks to be executed and in what order (HOW)
+	 'Section Resource' 		('ResourceModel' rmodel+=ResourceModel)+		 	 				 // Executer of work items
+	 'Section System'	 		('Service' amodel+=Service)+					 	 				 // process+case+resource (BY WHOM?) (incl. mapping)
+	 'Section Scenario' 		('Scenario' scenario+=Scenario)+				 	 				 // set of activities
+	 'Section Measure' 		    searches+=MeasurementSearches 											 // method of traversing the design space
+	 							('Measure' experiment+=Measurement)* 	 							 // the experiments to perform to derive specific performance numbers 
+										   result+=MeasurementResults								 // Derived performance numbers from experiments
+										   validity+=ValidityResults						      	 // Given measurement eCDFs to validate the model
+										   multiplier+=MultiplyResults								 // Multiplies the result with a constant factor per design before they are stored in the DSL
+										   															 // Useful when an abstraction is made (e.g., microseconds to millseconds) that needs undoing
+	 'Section Study' 			(study+=Study)							 			 				 // set of scenarios which each are based on a Design Space element
+	  ('Section Configuration'  conf+=Config)?														 // makes it possible to dynamically change the configuration
+;
+
+TimeUnit: 						{TimeUnit} 'year' | 'week' | 'day' | 'hour' | 's' | 'ms' | 'us' | 'ns' ;
+
+//EXPRESSION: superset of all real expressions
+Exp:							AExp | MVExp ; 
+// ARITHMIC EXPRESSION: have one outcome value that is always the same (within a design alternative)
+	AExp:							AExpMiniform | AExpParent | AExpVal | AExpDspace | AExpExpr ; 	
+	AExpVal:						value = INT timeunit+=TimeUnit?;
+	AExpDspace:     				'dspace' '(' param+=STRING ')' ;
+	AExpExpr: 						'(' a1+=AExp op+=Op a2+=AExp ')' ;
+	AExpParent: 					{AExpParent} 'parent';
+	AExpMiniform:					{AExpMiniform} 'miniform' ; // uniform distribution on [0,1) for simulations, but 0 in other cases.
+	Op:								'+' | '-' | '*' | '/' ;
+	LBOp:							'+' | '-' | '*' | '/' | '%' ; // operators for load balancing
+// MULTI VALUE EXPRESSION: have multiple outcome values and require ALT or PALT choice for resolving
+	MVExp:							MVExpExponential | MVExpCoDomain | MVExpUniform | MVExpDiscreteUniform | MVExpECDF | 
+									MVExpNondet | MVExpDiscreteNondet;
+		MVExpExponential:				{MVExpExponential} 'exp' value = STRING ('with precision' prec = INT)? /* double */; // only for simulations
+		MVExpUniform:    				'uniform' '(' min=INT ':' max=INT ')' ;
+		MVExpDiscreteUniform:			'discrete uniform' '(' min=INT ':' max=INT ')' ;
+		MVExpNondet:					'non-deterministic' '(' min=INT ':' max=INT ')' ;
+		MVExpDiscreteNondet:			'discrete non-deterministic' '(' min=INT ':' max=INT ')' ;
+		MVExpCoDomain:					'codomain' '(' (value+=INT+) ')' ;
+		MVExpECDF:						is_ratio=ID? ('eCDF with values'|'value'|'1div')  (freqval+=FreqValue+) 
+										| MVExpECDFfromfile  
+										| /*MVExpECDFfromdspace |*/ MVExpECDFbasedonDSI 
+										| /*MVExpECDFtransition |*/ MVExpECDFabstract 
+										| MVExpECDFProduct // when is_ratio=="ratio", the order of the CDF entries may not be changed
+										| MVExpECDFQuotient; // only used for 'pretty printing' in the thesis
+			FreqValue:						'(' freq+=INT? ':'? value+=INT ')'; // No frequency means frequency=1
+		//MVExpECDFidentity:			{MVExpECDFidentity} 'eCDF identity';
+		MVExpECDFfromfile:				is_ratio=ID? ('eCDF from file'|'CDF from file'|'EDF from file'|'uniform from file') 
+											filename=STRING tu+=ECDFTimeUnit? nd+=ECDFNonDeterministic? ('using' num_samples+=INT 'samples')?;
+			ECDFTimeUnit:					'time unit' time_unit=INT;
+			ECDFNonDeterministic:			{ECDFNonDeterministic} 'non-deterministic time';			
+		//MVExpECDFfromdspace:			'eCDF from dspace' dspace+=STRING;
+		// Implement is_ratio for more CDF types??
+		// PRE SELECTOR: 'select' 'dspace' '(' param+=ID ')' '{' ecdfs+=MVExpECDF+ '}'; // Selects an element from ecdfs, based on the current DSI
+		MVExpECDFbasedonDSI:			'select' 'dspace' '(' param+=STRING ')' '{' select_ecdfs+=SelectECDF+ '}'; // Selects an element from ecdfs, based on the current DSI
+			SelectECDF:						select+=STRING ':' ecdf+=MVExpECDF;
+		//MVExpECDFProduct:				'product' '{'  ecdfs+=MVExpECDF+ '}'; // A list of CDFs, whose product needs to be determined
+		MVExpECDFQuotient:/* not implemented! */	{MVExpECDFQuotient} 'quotient' '{' ecdfs+=MVExpECDF (sep+=Seperator? ecdfs+=MVExpECDF)* '}'; // A list of CDFs, whose product needs to be determined
+		MVExpECDFProduct:				{MVExpECDFProduct} 'product' '{' ecdfs+=MVExpECDF (sep+=Seperator? ecdfs+=MVExpECDF)* '}'; // A list of CDFs, whose product needs to be determined
+		MVExpECDFabstract:				('eCDF call'|'CDF call'|'EDF call'|'call') abstract_cdf=[AbstractCDF|ID] ;
+		//MVExpECDFtransition:			'transition' 'between' file1+=MVExpECDFfromfile 'and' file2+=MVExpECDFfromfile;	// takes the quotient of two MVExpECDFfromfile, to emulate a transitions
+
+// PROCESS
+ExtendedProcessModel:   		name=ID pmodel+=ProcessModel spm+=SubProcessModel* aload+=AbstractCDF*; // changed from: (name=ID pmodel+=ProcessModel)
+								
+SubProcessModel:				'Abstract ProcessModel' name+=ID pmodel+=ProcessModel ;
+AbstractCDF:					('Abstract CDF'|'Abstract EDF'|'Abstract eCDF'|'Abstract load') name=ID load+=MVExpECDF;
+
+ProcessModel:					(AtomicProcessModel | ParProcessModel | AltProcessModel | SeqProcessModel | PaltProcessModel | MutexProcessModel | 
+								AbstractionProcessModel | SeqParProcessModel | DesAltProcessModel | RepeatProcessModel | LoadBalancerProcessModel )
+								('kmeans_clustering_score' kmeans_clustering_score += STRING)?; 
+	AbstractionProcessModel:		'call'		name = ID  taskload+=TaskLoad;
+	AtomicProcessModel:				'atom' 		name = ID  taskload+=TaskLoad ('to')? taskload_nondet+=TaskLoad?;    
+	ParProcessModel:				'par' 		name = ID? taskload+=TaskLoad? '{' pmodel+=ProcessModel (sep+=Seperator? pmodel+=ProcessModel)* '}' ; 
+	AltProcessModel:				'alt'  		name = ID? taskload+=TaskLoad? '{' pmodel+=ProcessModel (sep+=Seperator? pmodel+=ProcessModel)* '}' ;
+	SeqProcessModel:				'seq' 		name = ID? taskload+=TaskLoad? '{' pmodel+=ProcessModel (sep+=Seperator? pmodel+=ProcessModel)* '}';
+	PaltProcessModel:				'palt'  	name = ID? taskload+=TaskLoad? '{' ppmodel+=ProbProcess (sep+=Seperator? ppmodel+=ProbProcess)* '}' ; 
+		ProbProcess:					prob+=INT pmodel+=ProcessModel ;
+	MutexProcessModel:				'mutex' 	name = ID? taskload+=TaskLoad? ('for' num_instances=INT 'instances')?  '{' pmodel+=ProcessModel '}' ;
+	SeqParProcessModel:				'seqpar'	sf = SyncFrequency name = ID? taskload+=TaskLoad? '{' pmodel+=ParProcessModel+ '}'; 
+	// PRE SELECTOR: DesAltProcessModel:				'desalt'	'(' param+=ID ')' name = ID? taskload+=TaskLoad? '{' pmodel+=ProcessModel+ '}';
+	DesAltProcessModel:				'desalt'	'(' param+=ID ')' name = ID? taskload+=TaskLoad? '{' pmodel+=SelectProcessModel+ '}'; 
+		SelectProcessModel:				select+=STRING ':' pmodel+=ProcessModel;
+	RepeatProcessModel:				'repeat'    name = ID? taskload+=TaskLoad? 'times' freqval+=FreqValue+ '{' pmodel+=ProcessModel '}'; // repeats a process N times, where N is a stochastic value
+	LoadBalancerProcessModel:		'lbalt'     name = ID? taskload+=TaskLoad? 
+												'policy' '{' lb_policies += LoadBalancerPolicy '}' ('policy' '{' lb_policies += LoadBalancerPolicy '}')*
+												'configuration' '{' lb_config = LoadBalancerConfiguration '}'  
+												'{' pmodel+=AtomicProcessModel (sep+=Seperator? pmodel+=AtomicProcessModel)* '}';
+	
+
+
+// TO ADD: desalt. to select one out of several options in the design space instance
+// TO ADD: enable the seqpar, so support of multithreading between activities becomes enabled
+
+
+TaskLoad:						'load' load = Exp ;	
+SyncFrequency:					SyncFrequencyOnce | SyncFrequencyAlways | SyncFrequencySometimes;	
+	SyncFrequencyOnce:				{SyncFrequencyOnce} 		'sync once';	
+	SyncFrequencyAlways:			{SyncFrequencyAlways} 		'sync always';
+	SyncFrequencySometimes:			{SyncFrequencySometimes}  	'sync after' '(' (turn+=INT)+ ')';
+// The grammar for a Load Balancing (static) policy, i.e., the system the load balancer sends the next load to.			
+LoadBalancerPolicy:				(LBIdentifier | LBValue /*| LBDspace */ | LBRandom | LBExpr | 
+								LBQueueSize | LBenergy | LBstate | LBtime |
+								LBLastIdentifier | LastDelayExplore | LastDelayExploit | LBNumServers );	
+	LBIdentifier:				{LBIdentifier} 'ID';
+	LBLastIdentifier:			{LBLastIdentifier} 'LastID';
+	LastDelayExplore:			{LastDelayExplore} 'LastDelay0'; // to implement
+	LastDelayExploit:			{LastDelayExploit} 'LastDelayINF'; // to implement
+	LBNumServers:				{LBNumServers} 'LBNumServers'; 
+	LBValue:					'[' value=AExp ']';
+	LBRandom:					{LBRandom} 'random';
+	//LBDspace:					'dspace' '(' param+=STRING ')' ; // COVERED BY THE AEXP
+	LBExpr:						'(' a1+=LoadBalancerPolicy op+=LBOp a2+=LoadBalancerPolicy ')' ;
+	LBQueueSize:				{LBQueueSize} 'queueSize';
+	LBenergy:					LBenergyOn | LBenergyShutdown | LBenergySleep | LBenergyStartup ;
+		LBenergyOn: 			{LBenergyOn} ('energyOn'|'powerOn');
+		LBenergyShutdown:		{LBenergyShutdown} ('energyShutdown'|'powerShutdown');
+		LBenergySleep:			{LBenergySleep} ('energySleep'|'powerSleep');
+		LBenergyStartup:		{LBenergyStartup} ('energyStartup'|'powerStartup');
+	LBstate:					LBstateOn | LBstateShutdown | LBstateSleep | LBstateStartup;
+		LBstateOn:				{LBstateOn} 'stateOn';
+		LBstateShutdown:		{LBstateShutdown} 'stateShutdown';
+		LBstateSleep:			{LBstateSleep} 'stateSleep';
+		LBstateStartup:			{LBstateStartup} 'stateStartup';
+	LBtime:						LBtimeShutdown | LBtimeStartUp | LbtimeOutTime;
+		LBtimeShutdown:			{LBtimeShutdown} 'timeShutdown';
+		LBtimeStartUp:			{LBtimeStartUp} 'timeStartUp';
+		LbtimeOutTime:			{LbtimeOutTime} 'timeOutTime';
+	
+		
+// The way the components of the load balancer behave, both dynamically and energy-wise
+LoadBalancerConfiguration: 		('powerOn'|'energyOn') energyOn+=AExp 
+								('powerShutdown'|'energyShutdown') energyShutdown+=AExp 
+								('powerSleep'|'energySleep') energySleep+=AExp 
+								('powerStartup'|'energyStartup') energyStartup+=AExp 
+								'timeStartUp' timeStartUp+=AExp 
+								'timeShutdown' timeShutdown+=AExp
+								'timeOutTime' timeOutTime+=AExp;
+
+/* TEMPORARY. JUST FOR COPY PASTE
+Exp:							AExp | MVExp ; 
+// ARITHMIC EXPRESSION: have one outcome value that is always the same (within a design alternative)
+	AExp:							AExpMiniform | AExpParent | AExpVal | AExpDspace | AExpExpr ; 	
+	AExpVal:						value = INT timeunit+=TimeUnit?;
+	AExpDspace:     				'dspace' '(' param+=STRING ')' ;
+	AExpExpr: 						'(' a1+=AExp op+=Op a2+=AExp ')' ;
+	AExpParent: 					{AExpParent} 'parent';
+	AExpMiniform:					{AExpMiniform} 'miniform' ; // uniform distribution on [0,1) for simulations, but 0 in other cases.
+	Op:								'+' | '-' | '*' | '/' ;
+ */
+
+// '{' pmodel+=ProcessModel (sep+=Seperator? pmodel+=ProcessModel)* '}' ;
+
+// RESOURCE	
+ResourceModel:					name=ID  restree+=ResourceTree
+									'connections' '{' (resconn+=ResourceConnection)+ '}';
+ResourceTree: 					AtomicResourceTree | PFPAtomicResourceTree | CompoundResourceTree ;
+// TO ADD: desalt. to select one out of several options in the design space instance
+AtomicResourceTree: 			'atom'   name = ID taskrate+=TaskRate? ('buffersize' buffer_size=AExp)? ;
+CompoundResourceTree: 			'decomp' name = ID? taskrate+=TaskRate? '{' rtree+=ResourceTree (sep+=Seperator? rtree+=ResourceTree)*  '}' ;
+ResourceConnection:  			'(' resource_from = ID ',' resource_to = ID ')' ;
+TaskRate: 						'rate' rate = AExp ;
+
+	PFPAtomicResourceTree: 'pfpatom' name = ID? taskrate+=TaskRate? '{'
+		'powerOn' powerOn = INT
+		'powerOff' powerOff = INT
+		'shutdownTime' shutdownTime = INT
+		'startupTime' startupTime = INT
+		'shutdownPolicy' shutdownPolicy = INT
+		'toFailure' toFailure = Distribution 
+		'toRepair' toRepair = Distribution '}';
+	
+	Distribution: pv+=ProbabilityValue+;
+	ProbabilityValue: prob=INT val=INT;
+
+// DESIGN SPACE
+DesignSpaceModel:  				{DesignSpaceModel} ('DesignSpace'   constraint     +=BExpconstraint*	
+																	bexpwhitelist  +=BExpFileWhitelist?															
+																	dsparam        +=DesignSpaceParam* ) ;
+	DesignSpaceParam: 			'(' variable += STRING '{' (value += STRING)+ '}' ')';
+
+// BOOLEAN EXPRESSION: definition of a boolean constraint, depending on design instance instances, to filter DSIs and thereby select a subset of the total DSM
+BExpconstraint: 'constraint'  bexp+=BExp ;
+	BExp: BExpTrue | BExpFalse | BExpCmpString |  BExpBi | BExpNeg;  
+		BExpTrue : { BExpTrue} 'true';
+		BExpFalse : { BExpFalse} 'false';
+		BExpValue: BExpString | BExpDspace | BExpArithmetic ;// values, which turn into boolean expresison via comparisons
+			BExpString:		value += STRING;
+			BExpDspace:		'dspace' '(' param+=STRING ')' ;
+			BExpArithmetic: ('[' bval_left+=BExpValue baop+=BAOp bval_right+=BExpValue ']');
+				BAOp: 			'+' | '-' | '*' | '/';
+		// value comparison operations
+		BExpCmpString: '(' bexpds_left+=BExpValue  bcmpop+=BCmpOp  bexpds_right+=BExpValue ')' ; 
+			BCmpOp: '=' | '<' | '>' | 'eq';
+		// composite boolean operations (AND, OR, implication, equivalence negation)
+		BExpBi:			'(' bexp_left += BExp  bop+=BOp  bexp_right += BExp ')';
+		BExpNeg:		'neg' '(' bexp += BExp ')' ;
+			BOp:        	'||' | '->' | '<->' | '&&' ;
+		BExpFileWhitelist:		'whitelist from CSV' filename=STRING; 
+ 
+	
+UtilityOrder:'TO BE IMPLEMENTED!!!!';
+
+// ACTIVITY: PROCESS + RESOURCE + CASE
+Service: 						name=ID 'Process' 				extprocess_id = [ExtendedProcessModel|ID]  
+										'Resource' 				resource_id = [ResourceModel|ID]  
+										'Mapping' 				mapping+= Mapping ;
+
+Mapping:						'assign' '{' (prassignment+=ProcessResource)+ '}' ('scheduling policy' '{' (rspolicy+=ResourceSchedulingPolicy)+ '}')? ;
+	ProcessResource:  				'(' process = ID ('priority' plevel+=PriorityLevel)?  ',' resource = ID  ')' ;
+	ResourceSchedulingPolicy:		'(' resource = ID ',' policy = SchedulingPolicy timeslice = TimeSlice ')' ;   		  // TO IMPLEMENT
+
+// 3 SCHEDULING DIMENSIONS
+SchedulingPolicy:				( SchedulingPolicyNonDet | SchedulingPolicyFIFO ) ; 	  								  // TO IMPLEMENT
+	SchedulingPolicyNonDet:			{SchedulingPolicyNonDet} 'Non-deterministic' ;
+	SchedulingPolicyFIFO:			{SchedulingPolicyFIFO}   'FIFO' ;
+TimeSlice:						{TimeSlice} ('with time slice' time=AExp)? ;	
+PriorityLevel:					( PriorityLevelHigh | PriorityLevelMedium | PriorityLevelLow ) ;
+	PriorityLevelHigh:				{PriorityLevelHigh} 	'high' ;
+	PriorityLevelMedium:			{PriorityLevelMedium} 	'medium' ;
+	PriorityLevelLow:				{PriorityLevelLow} 		'low' ;
+
+// ACTIVITY INSTANCE
+Scenario:						name+=ID ainstance+=ServiceRequest+ ;
+ServiceRequest: 				'ServiceRequest' activity_id += [Service|ID] time+=TimeSchedule ;
+TimeSchedule: TimeScheduleFixedIntervals | TimeScheduleLatencyJitter | TimeScheduleExp | TimeScheduleCDF ;
+	TimeScheduleFixedIntervals: 'at time' start=AExp ',' interval=AExp ',' '...'  ('for' frequency=AExp 'times')? ('using' num_instances=AExp 'instances')?;
+	TimeScheduleLatencyJitter:  'with period' period=AExp 'and jitter' jitter=AExp ('using' num_instances=AExp 'instances')?;
+	TimeScheduleExp:		    'with distribution'  exp+=  MVExpExponential ('using' num_instances=AExp 'instances')?; 
+	TimeScheduleCDF:			'with distribution' ecdf+= MVExpECDF ('using' num_instances=AExp 'instances')?;
+
+// EXPERIMENT
+MeasurementSearches:				{MeasurementSearches} ms+=MeasurementSearch?;
+MeasurementSearch:					MeasurementSearchBruteForce | MeasurementSearchHillClimbing; // way of traversing the design space
+	MeasurementSearchBruteForce:	{MeasurementSearchBruteForce} 'Brute force search';
+	MeasurementSearchHillClimbing:	{MeasurementSearchHillClimbing} 'Hill climbing search'; // ADD parameters here
+
+Measurement:					(MeasurementSimulationINT | MeasurementSimulation | MeasurementThroughput | 
+								 MeasurementTheoBounds | MeasurementPTAModelChecking |
+								 MeasurementPTAModelChecking2 | MeasurementMultiDisciplinary ); 
+	MeasurementSimulationINT:		('ServiceResponseTimesInt') 'using' num_runs = INT 'runs' 'of' num_activityis = INT 'ServiceRequests' 
+									stopwatch_distribution += StopwatchDistribution?;
+					StopwatchDistribution: 			(OneStopwatchPerInstance|OneGlobalStopwatchForInstances);
+					OneStopwatchPerInstance: 		{OneStopwatchPerInstance}		 'OneStopwatchPerInstance';
+					OneGlobalStopwatchForInstances: {OneGlobalStopwatchForInstances} 'OneGlobalStopwatchForInstances';
+	MeasurementSimulation:			('ServiceResponseTimes'|'ServiceResponse times') 'using' num_runs = INT 'runs' 'of' num_activityis = INT 'ServiceRequests' 
+									stopwatch_distribution += (OneStopwatchPerInstance|OneGlobalStopwatchForInstances)?;
+	MeasurementMultiDisciplinary:	'MultiDisciplinary' 'ServiceResponseTimes' 'using' num_runs = INT 'runs' 'of' num_activityis = INT 'ServiceRequests';
+	MeasurementThroughput:			'throughput' 'using' num_activityis = INT 'ServiceRequests' ;
+	MeasurementTheoBounds:			{MeasurementTheoBounds} 'theoretical bounds'|'ServiceResponse absolute times'/*dummy for the thesis*/;
+	//MeasurementValidation:			'model validity using eCDFs in folder' folder=STRING ; // TODO 
+	MeasurementPTAModelChecking:	{MeasurementPTAModelChecking} 'CDF of' ('ServiceResponseTimes'|'ServiceResponse times') 'via PTA model checking'    
+					('granularity' granularity += INT)? /* no value means maximum granularity (time unit=1) */ 
+					('eliminate probabilism')? // for the PTA model checking paper 1.0 
+				  	('threads' num_threads += INT)? /* no values means config:"number_of_threads_to_use_for_pta_model_checking"s */
+				    ('image selection rate' image_selection_rate += INT)? // the geometric rate used in the modest model
+				    ('simplify model to ' num_segments+=INT 'segments')? // a palt, consisting of n non-determistic segments
+  				    ('simplify model dynamically having maximally' ptamodelchecktime_seconds+=INT 'seconds per exection')? ; // selects a realistic model as possible, based on the model checking time 
+	
+	MeasurementPTAModelChecking2: {MeasurementPTAModelChecking2} 'CDF of' ('ServiceResponseTimes'|'ServiceResponse times') 'via advanced PTA model checking' 
+					('DynamicallySelectingModelTimeout'   dynamically_selecting_model_timeout+=STRING)? // after how many seconds will model checking be interrupted?
+					('ModelTimeUnitStepSize' 			  model_time_unit_step_size+=STRING)?
+					('ModelTimeUnitNumSteps' 			  model_time_unit_num_steps+=STRING)?
+					('SegmentStepSize'       			  segement_step_size+=STRING)?
+					('SegmentNumSteps'          		  segment_num_steps+=STRING)?
+					('SimulationNumRuns'    	 		  simulation_num_runs+=STRING)?
+					('SimulationRunLength'      		  simulation_run_length+=STRING)? 
+					('KmeansOverallIterations'      	  kmeans_overall_iterations+=STRING)?
+					('KmeansBalancingIterations'     	  kmeans_balancing_iterations+=STRING)?
+					('NumberOfCores'					  num_cores+=STRING)?
+					('FindingBoundsMethodNumber'		  find_bounds_method_number+=STRING)?; 
+						// 0) As before
+						// 1) Same model, same properties, but enable precomputations
+						// 2) Same model, qualitative properties, enable precomputations
+						// 3) Model with alt in place of palt, same properties, enable precomputations 
+	
+MeasurementResults:				{MeasurementResults} utils+=Utility* costs+=Cost* comp_results+=ComputedResult* ;
+	ComputedResult: 				'Result' '('         (ComputedResultLatency | ComputedResultUtilization | ComputedResultBounds | 
+														  ComputedTimeouts | ComputedProbabilities | ComputedProbabilities2 ) ')' ;
+		ComputedResultLatency: 		'latency' '('        dsm_values+=STRING run+=INT service+=STRING latencies+=STRING+ ')';
+		ComputedResultUtilization:	'utilization' '('    dsm_values+=STRING run+=INT resource+=STRING utilization+=STRING ')';
+		ComputedResultBounds:		'bounds' '('         dsm_values+=STRING service+=STRING lower_bound+=STRING upper_bound+=STRING ')';
+		ComputedTimeouts:			'timeouts''('        dsm_values+=STRING service+=STRING run+=INT timeouts+=STRING ')';
+		ComputedProbabilities:		'probabilities'      dsm_values+=STRING service+=STRING pmin_or_pmax+=STRING latenciesfrom0to100percent+= STRING+ ')'; // pta model checking
+		ComputedProbabilities2:		'probabilities2'     dsm_values+=STRING service+=STRING pmin_or_pmax+=STRING latenciesfrom0to100percent+= STRING+ ')'; // pta model checking 2.0	
+
+	Utility:						{Utility} 'Utility' name=ID ('with function')? util_func=UExp requirement+=UtilityCostRequirement? util_result+=UtilityResult* ;
+		UtilityResult:					{UtilityResult}	'and results' dsm_values=STRING value=STRING meet_requirement+=STRING?;
+	Cost:				 ('Cost' name=ID ('with function')? util_func=UExp requirement+=UtilityCostRequirement?); // are all transformed into a utility function in syntactic sugar
+		UtilityCostRequirement:			{UtilityCostRequirement} 'having requirement' threshold_value+=STRING;
+
+ValidityResults:				{ValidityResults} validity_res+=ValidityResult* ;
+	ValidityResult:					'Validity measurement' dsm_values+=STRING  ecdf+=MVExpECDF service+=STRING validity_values+=ValidityValues? ;
+		ValidityValues:					'values' run+=INT ('Kolmogorov' kolmogorov+=STRING forvalue+=STRING)? ('Execution' exec+=STRING forprobability+=STRING)? ;
+
+MultiplyResults:				{MultiplyResults} multiplyresult+=MultiplyResult*;
+	MultiplyResult:					'Multiply results' dsm_values+=STRING factor+=INT;
+	
+// STUDY
+Study:							substudy += SubStudy ;
+SubStudy:						('Scenario' scenario_id+=ID dspacem+=DesignSpaceModel+) ;
+
+// UTILITY FUNCTIONS FOR MEASUREMENTS 
+UExp:							AExpDspace | AExpVal | UExpExpr | UExpMeasurement | UExpAggregatedMeasurement;
+	UExpExpr: 					'(' a1+=UExp op+=Op a2+=UExp ')' ;
+
+UExpAggregatedMeasurement:		aggrfunc+=UExpAggregateFunction 'of' measure+=UExpMeasurement;
+UExpAggregateFunction:			UExpAggregateSum | UExpAggregateAverage | UExpAggregateCount | UExpAggregateMaximum | UExpAggregateMedian | 
+									UExpAggregatePercentBelow | UExpAggregateValueBelow |
+									UExpAggregateMinimum | UExpAggregateLConfInterval | UExpAggregateUConfInterval | UExpAggregatMinkowskiDist | 
+									UExpAggregatePercentBelow2 | UExpAggregateValueBelow2 ;
+	UExpAggregateSum:			 {UExpAggregateSum} 		 'sum';
+	UExpAggregateAverage:		 {UExpAggregateAverage} 	 'average';
+	UExpAggregateCount:			 {UExpAggregateCount} 		 'count';
+	UExpAggregateMaximum: 		 {UExpAggregateMaximum} 	 'maximum';
+	UExpAggregateMedian: 		 {UExpAggregateMedian} 		 'median';
+	UExpAggregateMinimum: 		 {UExpAggregateMinimum}		 'minimum';
+	UExpAggregateLConfInterval:  {UExpAggregateConfInterval} 'lower confidence'    ( level=UExpParameterInt ) ;
+	UExpAggregateUConfInterval:  {UExpAggregateConfInterval} 'upper confidence'    ( level=UExpParameterInt ) ;
+	UExpAggregatMinkowskiDist:   {UExpAggregatMinkowskiDist} 'minkowski' 	       ( order=UExpParameterInt ) ; 
+	UExpAggregatePercentBelow:   {UExpAggregatePercentBelow} 'percent below'	   ( value=UExpParameterInt timeunit+=TimeUnit? ) ;     // percentage below a certain value
+	UExpAggregateValueBelow:     {UExpAggregateValueBelow}   'percentile'	       ( percentage=UExpParameterInt ) ; 					// percentile value
+	UExpAggregatePercentBelow2:  {UExpAggregatePercentBelow} '2.0 percent below'   ( value=UExpParameterInt timeunit+=TimeUnit? ) ;     // percentage below a certain value
+	UExpAggregateValueBelow2:    {UExpAggregateValueBelow}   '2.0 percentile'	   ( percentage=UExpParameterInt ) ; 					// percentile value
+	
+
+// A measurement function with a number of parameters
+//UExpMeasurement:				UExpMeasurementFunction // TO IMPLEMENT
+	UExpMeasurement:		UExpFuncServiceRequest | UExpFuncUpperBound | UExpFuncLowerBound | UExpFuncUtilization | UExpFuncTimeouts /* TO IMPLEMENT */ | 
+							UExpFuncTimeToProb | UExpFuncProbToTime;
+		UExpFuncServiceRequest:			{UExpFuncServiceRequest} 'latencies' '(' ('Service')? service = UExpParameterString ',' 'Run' runs = UExpParameterIntRange ',' 'Request' requestno = UExpParameterIntRange ')'; 
+		UExpFuncUpperBound:				{UExpFuncUpperBound} 'lower bound' '(' ('Service')? service = UExpParameterString ')' ;
+		UExpFuncLowerBound:				{UExpFuncLowerBound} 'upper bound' '(' ('Service')? service = UExpParameterString ')' ;
+		UExpFuncUtilization:			{UExpFuncUtilization} 'utilization' '(' ('Resource')? resource = UExpParameterString ',' 'Run'  runs = UExpParameterIntRange ')' ;
+		UExpFuncTimeouts:				{UExpFuncTimeouts} 'timeouts' '(' ('Service')? service = UExpParameterString ',' 'Run' runs = UExpParameterIntRange ')';
+		UExpFuncTimeToProb:  			{UExpFuncTimeToProb} ('percentage below time'|'percentageBelowTime') '(' ('Service')? service = UExpParameterString ',' 'Time' time = UExpParameterInt timeunit+=TimeUnit? ',' min_max=MinOrMax ')';
+		UExpFuncProbToTime:				{UExpFuncProbToTime} ('time after percentage has finished'|'timeAfterPercentageHasFinished') '(' ('Service')? service = UExpParameterString ',' 'Percentage' percentage = UExpParameterInt ',' min_max=MinOrMax ')';
+	
+		UExpParameterString: 	   str=ID ;
+		UExpParameterInt: 		   int12=INT ;
+		UExpParameterIntRange: 	   UExpParameterTrueIntRange| UExpParameterInt ; //lower and upper value of the range, can be abbreviated to a single INT when equal
+		UExpParameterTrueIntRange: (int1=INT '..' int2=INT) ;
+
+		MinOrMax:					(MinOrMax_min | MinOrMax_max);
+		MinOrMax_min:				{MinOrMax_min}   ('pmin' | 'tmax');
+		MinOrMax_max:				{MinOrMax_max}   ('pmax' | 'tmin');
+
+// To override the standard configuration as specified in Configuration.xtend (MAY BE LEFT EMPTY!!)
+Config:							{Config} kv+=ConfigKeyValue*;
+ConfigKeyValue:					'(' key=STRING value=STRING ')';
+
+Seperator:					{Seperator} ','; // Defines how objects (e.g., processes or CDFs) are seperated 
+//								For now (","|"") has been used. Please find these in the code and replace them with Seperators
