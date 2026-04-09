@@ -41,6 +41,3 @@ Section Measure
 Section Study
  Scenario image_processing_run
  DesignSpace ("offset" {"0" "20" "40" "80" "120" "160" "200"})
-
-Section Configuration
-	( "execute_this" "false" )
