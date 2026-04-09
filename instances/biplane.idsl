@@ -1,0 +1,68 @@
+Section Process
+	ProcessModel Image_Processing mutex { seq {
+		seq Noise_reduction {
+			atom Pre_processing load product    		{ ratio eCDF from file "ratio#1Reorientation", 	eCDF call dsi_cdf }
+			atom Basic load product     	   			{ ratio eCDF from file "ratio#1Basic", 			eCDF call dsi_cdf }
+			atom Decompose1 load product       			{ ratio eCDF from file "ratio#1Decompose",  	eCDF call dsi_cdf }
+			atom Spatial_noise_reduction load product   { ratio eCDF from file "ratio#SpatialNoiseReducation", 			eCDF call dsi_cdf }
+			atom Temporal_noise_reduction load product  { ratio eCDF from file "ratio#TemporalNoiseReducation",  		eCDF call dsi_cdf }
+			atom Compose1 load product     	   			{ ratio eCDF from file "ratio#1Compose",    	eCDF call dsi_cdf }
+		}
+		seq Refine {
+			atom Decompose2 load product   				{ ratio eCDF from file "ratio#2Decompose",  eCDF call dsi_cdf }
+			atom Refine_step1 load product  			{ ratio eCDF from file "ratio#2Unique",  	eCDF call dsi_cdf }
+			atom Compose2 load product     				{ ratio eCDF from file "ratio#2Compose",    eCDF call dsi_cdf }
+			atom Decompose3 load product   				{ ratio eCDF from file "ratio#3Decompose",  eCDF call dsi_cdf }
+			atom Refine_step2 load product  			{ ratio eCDF from file "ratio#3Unique",  	eCDF call dsi_cdf }
+			atom Compose3 load product     				{ ratio eCDF from file "ratio#3Compose",    eCDF call dsi_cdf }
+		}
+	} }
+	
+	Abstract CDF dsi_cdf product {
+		eCDF from file "512_monoplane#SUM_bruto"
+		select dspace("resolution"){
+			"512":  	 ratio eCDF from file "ratio#id"
+			"1024": 	 ratio eCDF from file "ratio#res_1024"
+			"2048": 	 ratio eCDF from file "ratio#res_2048"
+		},	 	
+		select dspace("mode"){ 
+			"monoplane": ratio eCDF from file "ratio#id"
+			"biplane":   ratio eCDF from file "ratio#mode_biplane"
+		}
+	}
+
+Section Resource
+	ResourceModel Biplane_PC decomp{ atom CPU rate 1 } connections {(CPU,CPU)}
+	
+Section System
+	Service Image_Processing_Service
+		Process Image_Processing
+		Resource Biplane_PC
+		Mapping assign {
+			(Pre_processing,CPU) (Basic,CPU) 
+			(Decompose1,CPU) 
+      (Spatial_noise_reduction,CPU) 
+      (Temporal_noise_reduction,CPU) 
+      (Compose1,CPU)  
+			(Decompose2,CPU) 
+      (Refine_step1,CPU) 
+      (Compose2,CPU)
+			(Decompose3,CPU) 
+      (Refine_step2,CPU) 
+      (Compose3,CPU) 
+		} scheduling policy { (CPU, FIFO) }
+	
+Section Scenario
+	Scenario BiPlane_Image_Processing_run
+		ServiceRequest Image_Processing_Service at time 0, (2146009/dspace("framerate")), ...   // 1.000.000: for microseconds,  2,146009: load per second
+		
+Section Measure
+	Measure CDF of ServiceResponseTimes via advanced PTA model checking
+
+Section Study
+	Scenario BiPlane_Image_Processing_run
+		DesignSpace
+			("resolution"     {"512" "1024" "2048" } )
+			("mode" 		    {"monoplane" "biplane"} )
+			("framerate"      {"10" /* "5" "10" "15" "30" "60" "120" "240" */})
+			("numinstances"   {"1" /*"2" "3" "4"*/})
