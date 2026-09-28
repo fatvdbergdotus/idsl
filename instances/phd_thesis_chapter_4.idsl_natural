@@ -1,0 +1,38 @@
+Er is 1 proces.
+Proces image_processing_application is als volgt gedefineerd:
+ sequentie image_processing_seq {
+  atomair image_pre_processing met lading 50
+  sequentie image_processing {
+   atomair motion_compensation met lading 44,
+   atomair noise_reduction met lading uniform(80:140),
+   atomair contrast met lading 134 }
+  atomair image_post_processing met lading 25 }
+
+Er is 1 resource.
+ Resource image_processing_PC bestaat uit image_processing_decomp {
+   atomair CPU met capaciteit 2,
+   atomair GPU met capaciteit 5 }
+  De CPU en GPU zijn met elkaar verbonden.
+
+Het systeem biedt 1 service.
+ Service image_processing_service gebruikt proces image_processing_application en resource image_processing_PC
+   De mapping van de subprocesses naar subresources is als volgt:
+     image_pre_processing wordt uitgevoerd door de CPU.
+     motion_compensation wordt uitgevoerd door de CPU.
+     noise_reduction wordt uitgevoerd door de CPU.
+     contrast wordt uitgevoerd door de CPU.
+     image_post_processing wordt uitgevoerd door de GPU.
+
+Er is 1 scenario.
+Het scenario image_processing_run bevat 2 serviceverzoeken.
+  Serviceverzoek met service image_processing_service
+   op tijdstip 0, 400, ...
+  Serviceverzoek met service image_processing_service
+   op tijdstip zoekruimte("offset"), zoekruimte("offset")+400, ...
+
+Er zijn 2 meetmethoden
+ Meetmethode simulatie met 1 run van 280 serviceverzoeken.
+ Meetmethode model checking die absolute grenzen berekent.
+
+Er is 1 onderzoek
+ dat scenario image_processing_run betreft met zoekruimte ("offset" {"0" "20" "40" "80" "120" "160" "200"})
